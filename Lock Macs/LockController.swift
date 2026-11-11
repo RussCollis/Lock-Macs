@@ -8,7 +8,7 @@ enum LockTarget: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
-/// The outcome for one Mac.
+/// The outcome for one Mac, after locking it or removing its lock code.
 struct LockResult: Identifiable {
     enum Status {
         case pending
@@ -17,15 +17,18 @@ struct LockResult: Identifiable {
     }
 
     let computer: JamfComputer
+    /// The new PIN, or empty when the lock code is being removed.
     let pin: String
     var eaStatus: Status = .pending
-    var lockStatus: Status = .pending
+    /// Nil when only the lock code is being removed and no command is sent.
+    var lockStatus: Status? = .pending
     var id: String { computer.id }
 }
 
 @Observable
 final class LockController {
-    // Connection. The URL and client ID are remembered; the secret is held in memory only.
+    // Connection. The URL and client ID are remembered; the secret is held in memory
+    // unless the user chooses to save the API details to the Keychain.
     var serverURL = UserDefaults.standard.string(forKey: "serverURL") ?? "" {
         didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") }
     }
@@ -33,6 +36,7 @@ final class LockController {
         didSet { UserDefaults.standard.set(clientID, forKey: "clientID") }
     }
     var clientSecret = ""
+    private(set) var isSavedInKeychain = false
 
     // Inputs
     var target: LockTarget = .serial
@@ -57,6 +61,15 @@ final class LockController {
     /// cut off on the lock screen, so the UI warns (without blocking) past this.
     static let recommendedMessageLength = 200
 
+    init() {
+        if let saved = KeychainStore.load() {
+            serverURL = saved.serverURL
+            clientID = saved.clientID
+            clientSecret = saved.clientSecret
+            isSavedInKeychain = true
+        }
+    }
+
     var canFind: Bool {
         guard !isBusy, hasCredentials, Int(extensionAttributeID.trimmed) != nil else { return false }
         switch target {
@@ -78,11 +91,38 @@ final class LockController {
         !isBusy && !lockableComputers.isEmpty && extensionAttributeName != nil
     }
 
+    /// Removing a lock code only edits inventory, so Macs without MDM are included.
+    var canRemoveCodes: Bool {
+        !isBusy && !computers.isEmpty && extensionAttributeName != nil
+    }
+
     /// Clears the previewed Macs when an input changes, so a stale list can't be locked.
     func inputsChanged() {
         computers = []
         extensionAttributeName = nil
         results = []
+    }
+
+    // MARK: - Keychain
+
+    func saveToKeychain() {
+        do {
+            try KeychainStore.save(SavedCredentials(serverURL: serverURL.trimmed, clientID: clientID.trimmed, clientSecret: clientSecret))
+            isSavedInKeychain = true
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func removeFromKeychain() {
+        do {
+            try KeychainStore.delete()
+            isSavedInKeychain = false
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     // MARK: - Actions
@@ -140,6 +180,23 @@ final class LockController {
                     results[index].lockStatus = .done
                 } catch {
                     results[index].lockStatus = .failed(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Clears the stored PIN from the extension attribute on each found Mac.
+    func removeLockCodes() async {
+        let eaID = extensionAttributeID.trimmed
+        results = computers.map { LockResult(computer: $0, pin: "", lockStatus: nil) }
+
+        await run { client in
+            for index in results.indices {
+                do {
+                    try await client.setExtensionAttribute(id: eaID, value: "", computerID: results[index].computer.id)
+                    results[index].eaStatus = .done
+                } catch {
+                    results[index].eaStatus = .failed(error.localizedDescription)
                 }
             }
         }
