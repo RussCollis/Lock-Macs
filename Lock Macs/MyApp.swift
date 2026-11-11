@@ -6,7 +6,7 @@ import SwiftUI
             ContentView()
         }
         #if os(macOS)
-        .defaultSize(width: 1180, height: 780)
+        .defaultSize(width: 1340, height: 800)
         #endif
     }
 }

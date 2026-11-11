@@ -8,6 +8,34 @@ enum LockTarget: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+/// The two independent actions, each with its own target.
+enum LockOperation {
+    case lock
+    case removeCodes
+}
+
+/// Which Macs an action applies to, and the Macs found for it.
+struct TargetSelection {
+    var kind: LockTarget = .serial
+    var serial = ""
+    var groupID: Int?
+    var computers: [JamfComputer] = []
+
+    /// Restores the target type and smart group saved under `key`.
+    init(savedAs key: String) {
+        let defaults = UserDefaults.standard
+        kind = defaults.string(forKey: "\(key).kind").flatMap(LockTarget.init(rawValue:)) ?? .serial
+        groupID = defaults.object(forKey: "\(key).groupID") as? Int
+    }
+
+    /// Remembers the target type and smart group, so they are selected on next launch.
+    func save(as key: String) {
+        let defaults = UserDefaults.standard
+        defaults.set(kind.rawValue, forKey: "\(key).kind")
+        defaults.set(groupID, forKey: "\(key).groupID")
+    }
+}
+
 /// The outcome for one Mac, after locking it or removing its lock code.
 struct LockResult: Identifiable {
     enum Status {
@@ -39,9 +67,12 @@ final class LockController {
     private(set) var isSavedInKeychain = false
 
     // Inputs
-    var target: LockTarget = .serial
-    var serial = ""
-    var selectedGroupID: Int?
+    var lockSelection = TargetSelection(savedAs: "lockSelection") {
+        didSet { lockSelection.save(as: "lockSelection") }
+    }
+    var removeSelection = TargetSelection(savedAs: "removeSelection") {
+        didSet { removeSelection.save(as: "removeSelection") }
+    }
     var extensionAttributeID = UserDefaults.standard.string(forKey: "extensionAttributeID") ?? "" {
         didSet { UserDefaults.standard.set(extensionAttributeID, forKey: "extensionAttributeID") }
     }
@@ -51,11 +82,14 @@ final class LockController {
 
     // State
     private(set) var groups: [JamfComputerGroup] = []
-    private(set) var computers: [JamfComputer] = []
+    /// The action whose found Macs or results are shown in the results panel.
+    private(set) var panelOperation: LockOperation?
     private(set) var extensionAttributeName: String?
     private(set) var results: [LockResult] = []
     private(set) var isBusy = false
     var errorMessage: String?
+    /// The action that produced `errorMessage`, or nil for setup errors such as loading groups.
+    private(set) var errorOperation: LockOperation?
 
     /// Apple documents no hard limit for the lock message, but long text may be
     /// cut off on the lock screen, so the UI warns (without blocking) past this.
@@ -70,12 +104,41 @@ final class LockController {
         }
     }
 
-    var canFind: Bool {
-        guard !isBusy, hasCredentials, Int(extensionAttributeID.trimmed) != nil else { return false }
-        switch target {
-        case .serial: return !serial.trimmed.isEmpty
-        case .smartGroup: return selectedGroupID != nil
+    func selection(for operation: LockOperation) -> TargetSelection {
+        switch operation {
+        case .lock: lockSelection
+        case .removeCodes: removeSelection
         }
+    }
+
+    private func updateSelection(for operation: LockOperation, _ change: (inout TargetSelection) -> Void) {
+        switch operation {
+        case .lock: change(&lockSelection)
+        case .removeCodes: change(&removeSelection)
+        }
+    }
+
+    func canFind(for operation: LockOperation) -> Bool {
+        !isBusy && findBlocker(for: operation) == nil
+    }
+
+    /// Why Find Macs is unavailable for an action, or nil when it can run.
+    func findBlocker(for operation: LockOperation) -> String? {
+        guard hasCredentials else { return "Enter the Jamf Pro URL, client ID and secret." }
+        guard Int(extensionAttributeID.trimmed) != nil else { return "Enter a numeric extension attribute ID." }
+        let selection = selection(for: operation)
+        switch selection.kind {
+        case .serial:
+            return selection.serial.trimmed.isEmpty ? "Enter a serial number." : nil
+        case .smartGroup:
+            return selection.groupID == nil ? "Choose a smart group." : nil
+        }
+    }
+
+    /// The Macs shown in the results panel before an action runs.
+    var panelComputers: [JamfComputer] {
+        guard let panelOperation else { return [] }
+        return selection(for: panelOperation).computers
     }
 
     var hasCredentials: Bool {
@@ -84,7 +147,7 @@ final class LockController {
 
     /// Macs that can actually receive MDM commands.
     var lockableComputers: [JamfComputer] {
-        computers.filter { !$0.managementId.isEmpty }
+        lockSelection.computers.filter { !$0.managementId.isEmpty }
     }
 
     var canLock: Bool {
@@ -93,19 +156,30 @@ final class LockController {
 
     /// Removing a lock code only edits inventory, so Macs without MDM are included.
     var canRemoveCodes: Bool {
-        !isBusy && !computers.isEmpty && extensionAttributeName != nil
+        !isBusy && !removeSelection.computers.isEmpty && extensionAttributeName != nil
     }
 
-    /// Clears the previewed Macs when an input changes, so a stale list can't be locked.
-    func inputsChanged() {
-        computers = []
+    /// Clears one action's previewed Macs when its target changes, so a stale list can't be used.
+    func inputsChanged(for operation: LockOperation) {
+        updateSelection(for: operation) { $0.computers = [] }
+        if panelOperation == operation {
+            results = []
+        }
+    }
+
+    /// Clears everything found when a shared input (server or extension attribute) changes.
+    func sharedInputsChanged() {
+        lockSelection.computers = []
+        removeSelection.computers = []
         extensionAttributeName = nil
         results = []
+        panelOperation = nil
     }
 
     // MARK: - Keychain
 
     func saveToKeychain() {
+        errorOperation = nil
         do {
             try KeychainStore.save(SavedCredentials(serverURL: serverURL.trimmed, clientID: clientID.trimmed, clientSecret: clientSecret))
             isSavedInKeychain = true
@@ -116,6 +190,7 @@ final class LockController {
     }
 
     func removeFromKeychain() {
+        errorOperation = nil
         do {
             try KeychainStore.delete()
             isSavedInKeychain = false
@@ -127,32 +202,47 @@ final class LockController {
 
     // MARK: - Actions
 
+    /// Loads the groups at launch when a saved target is a smart group, so its selection shows.
+    func loadGroupsIfNeeded() async {
+        let usesGroups = lockSelection.kind == .smartGroup || removeSelection.kind == .smartGroup
+        guard usesGroups, groups.isEmpty, hasCredentials, !isBusy else { return }
+        await loadGroups()
+    }
+
     func loadGroups() async {
         await run { client in
             groups = try await client.smartGroups()
-            if let selectedGroupID, !groups.contains(where: { $0.id == selectedGroupID }) {
-                self.selectedGroupID = nil
+            let ids = Set(groups.map(\.id))
+            if let id = lockSelection.groupID, !ids.contains(id) { lockSelection.groupID = nil }
+            if let id = removeSelection.groupID, !ids.contains(id) { removeSelection.groupID = nil }
+            if groups.isEmpty {
+                throw JamfError.notFound("Jamf Pro returned no smart computer groups. Check the API role can read smart and static computer groups.")
             }
         }
     }
 
     /// Resolves the target Macs and checks the extension attribute, without changing anything.
-    func findComputers() async {
-        inputsChanged()
-        await run { client in
+    func findComputers(for operation: LockOperation) async {
+        inputsChanged(for: operation)
+        results = []
+        panelOperation = operation
+        let selection = selection(for: operation)
+        await run(for: operation) { client in
             let eaID = extensionAttributeID.trimmed
             extensionAttributeName = try await client.extensionAttributeName(id: eaID)
 
-            switch target {
+            let found: [JamfComputer]
+            switch selection.kind {
             case .serial:
-                computers = [try await client.computer(serial: serial)]
+                found = [try await client.computer(serial: selection.serial)]
             case .smartGroup:
-                guard let selectedGroupID else { return }
-                computers = try await client.members(ofGroup: selectedGroupID)
-                if computers.isEmpty {
-                    throw JamfError.notFound("That smart group has no members.")
+                guard let groupID = selection.groupID else { return }
+                found = try await client.members(ofGroup: groupID)
+                if found.isEmpty {
+                    throw JamfError.notFound("That smart group has no members, or none of its members could be found in inventory.")
                 }
             }
+            updateSelection(for: operation) { $0.computers = found }
         }
     }
 
@@ -162,9 +252,10 @@ final class LockController {
         let targets = lockableComputers
         let eaID = extensionAttributeID.trimmed
         let message = lockMessage.trimmed
+        panelOperation = .lock
         results = targets.map { LockResult(computer: $0, pin: Self.makePIN()) }
 
-        await run { client in
+        await run(for: .lock) { client in
             for index in results.indices {
                 let result = results[index]
                 do {
@@ -185,12 +276,13 @@ final class LockController {
         }
     }
 
-    /// Clears the stored PIN from the extension attribute on each found Mac.
+    /// Clears the stored PIN from the extension attribute on each Mac found for removal.
     func removeLockCodes() async {
         let eaID = extensionAttributeID.trimmed
-        results = computers.map { LockResult(computer: $0, pin: "", lockStatus: nil) }
+        panelOperation = .removeCodes
+        results = removeSelection.computers.map { LockResult(computer: $0, pin: "", lockStatus: nil) }
 
-        await run { client in
+        await run(for: .removeCodes) { client in
             for index in results.indices {
                 do {
                     try await client.setExtensionAttribute(id: eaID, value: "", computerID: results[index].computer.id)
@@ -211,9 +303,10 @@ final class LockController {
     }
 
     /// Creates a client, runs the work, shows any error and always tidies up the token.
-    private func run(_ work: (JamfClient) async throws -> Void) async {
+    private func run(for operation: LockOperation? = nil, _ work: (JamfClient) async throws -> Void) async {
         isBusy = true
         errorMessage = nil
+        errorOperation = operation
         defer { isBusy = false }
         do {
             let client = try JamfClient(serverURL: serverURL, clientID: clientID, clientSecret: clientSecret)

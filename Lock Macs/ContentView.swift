@@ -11,6 +11,7 @@ struct ContentView: View {
         NavigationStack {
             HStack(spacing: 0) {
                 LockSidePanel()
+                // Setup column
                 Form {
                     Section {
                         TextField("Jamf Pro URL", text: $controller.serverURL, prompt: Text("https://yourorg.jamfcloud.com"))
@@ -49,61 +50,44 @@ struct ContentView: View {
                         Text("API role needs: Read Computers, Update Computers, Read Smart Computer Groups, Read Computer Extension Attributes, Update Computer Extension Attributes, Send Computer Remote Lock Command. The secret is only stored if you save it to the Keychain.")
                     }
 
-                    Section("Target") {
-                        Picker("Send Lock To", selection: $controller.target) {
-                            ForEach(LockTarget.allCases) { Text($0.rawValue).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-
-                        switch controller.target {
-                        case .serial:
-                            TextField("Serial Number", text: $controller.serial)
-                                .autocorrectionDisabled()
-                        case .smartGroup:
-                            HStack {
-                                Picker("Smart Group", selection: $controller.selectedGroupID) {
-                                    Text("Choose…").tag(Int?.none)
-                                    ForEach(controller.groups) { group in
-                                        Text(group.name).tag(Optional(group.id))
-                                    }
-                                }
-                                Button("Load Groups", systemImage: "arrow.clockwise") {
-                                    Task { await controller.loadGroups() }
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(.teal)
-                                .disabled(controller.isBusy || !controller.hasCredentials)
-                            }
-                        }
-                    }
-
                     Section {
                         TextField("Extension Attribute ID", text: $controller.extensionAttributeID)
                         if let name = controller.extensionAttributeName {
                             LabeledContent("Extension Attribute", value: name)
                         }
-                        TextField("Lock Screen Message", text: $controller.lockMessage, axis: .vertical)
-                            .lineLimit(2...4)
                     } header: {
-                        Text("Lock")
+                        Text("Extension Attribute")
                     } footer: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("A random six digit PIN is created for each Mac and saved to the extension attribute (text field type) before the lock is sent. Message: \(controller.lockMessage.count) characters.")
-                            if controller.lockMessage.count > LockController.recommendedMessageLength {
-                                Label("Long messages may be cut off on the lock screen. Test on one Mac first.", systemImage: "exclamationmark.triangle")
-                                    .foregroundStyle(.orange)
-                            }
-                        }
+                        Text("A text field extension attribute that holds each Mac's lock PIN. Used by both Lock and Remove Lock Codes.")
                     }
 
+                    if let error = controller.errorMessage, controller.errorOperation == nil {
+                        Section {
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .formStyle(.grouped)
+
+                Divider()
+
+                // Actions sit in a second column so the whole window fits without scrolling
+                Form {
+
                     Section {
+                        TargetFields(controller: controller, selection: $controller.lockSelection, title: "Lock")
+                        TextField("Lock Screen Message", text: $controller.lockMessage, axis: .vertical)
+                            .lineLimit(3...5)
+
                         HStack {
                             Button("Find Macs", systemImage: "magnifyingglass") {
-                                Task { await controller.findComputers() }
+                                Task { await controller.findComputers(for: .lock) }
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.blue)
-                            .disabled(!controller.canFind)
+                            .disabled(!controller.canFind(for: .lock))
 
                             Button("Lock \(controller.lockableComputers.count) Mac(s)…", systemImage: "lock.fill", role: .destructive) {
                                 isConfirmingLock = true
@@ -112,7 +96,38 @@ struct ContentView: View {
                             .tint(.red)
                             .disabled(!controller.canLock)
 
-                            Button("Remove Lock Codes…", systemImage: "lock.open.fill") {
+                            Spacer()
+
+                            if controller.isBusy {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
+                        ActionStatus(controller: controller, operation: .lock)
+                    } header: {
+                        Text("Lock")
+                    } footer: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("A random six digit PIN is created for each Mac and saved to the extension attribute before the lock is sent. Message: \(controller.lockMessage.count) characters.")
+                            if controller.lockMessage.count > LockController.recommendedMessageLength {
+                                Label("Long messages may be cut off on the lock screen. Test on one Mac first.", systemImage: "exclamationmark.triangle")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+
+                    Section {
+                        TargetFields(controller: controller, selection: $controller.removeSelection, title: "Remove Codes From")
+
+                        HStack {
+                            Button("Find Macs", systemImage: "magnifyingglass") {
+                                Task { await controller.findComputers(for: .removeCodes) }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.blue)
+                            .disabled(!controller.canFind(for: .removeCodes))
+
+                            Button("Remove Codes (\(controller.removeSelection.computers.count))…", systemImage: "lock.open.fill") {
                                 isConfirmingRemove = true
                             }
                             .buttonStyle(.borderedProminent)
@@ -126,22 +141,20 @@ struct ContentView: View {
                                     .controlSize(.small)
                             }
                         }
+                        ActionStatus(controller: controller, operation: .removeCodes)
+                    } header: {
+                        Text("Remove Lock Codes")
+                    } footer: {
+                        Text("Clears the stored PIN from the extension attribute. Independent of the Lock target above.")
                     }
 
-                    if let error = controller.errorMessage {
-                        Section {
-                            Label(error, systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                                .textSelection(.enabled)
-                        }
-                    }
                 }
                 .formStyle(.grouped)
 
                 Divider()
 
                 ResultsPanel(controller: controller)
-                    .frame(width: 340)
+                    .frame(width: 320)
             }
             .navigationTitle("Jamf Remote Lock")
             #if os(macOS)
@@ -149,8 +162,8 @@ struct ContentView: View {
             .toolbar(removing: .title)
             #endif
             #if os(macOS)
-            // Large enough to show every option without scrolling
-            .frame(minWidth: 1100, minHeight: 720)
+            // Large enough to show every option in one window without scrolling
+            .frame(minWidth: 1320, minHeight: 760)
             #endif
             .confirmationDialog(
                 "Lock \(controller.lockableComputers.count) Mac(s)?",
@@ -164,7 +177,7 @@ struct ContentView: View {
                 Text("Each Mac will be locked with its own PIN, saved to “\(controller.extensionAttributeName ?? "")”. The Macs will restart and can only be unlocked with that PIN.")
             }
             .confirmationDialog(
-                "Remove lock codes from \(controller.computers.count) Mac(s)?",
+                "Remove lock codes from \(controller.removeSelection.computers.count) Mac(s)?",
                 isPresented: $isConfirmingRemove,
                 titleVisibility: .visible
             ) {
@@ -175,11 +188,86 @@ struct ContentView: View {
                 Text("This clears “\(controller.extensionAttributeName ?? "")” for each Mac. Only do this once the Macs are unlocked, as any Mac that is still locked will need its PIN.")
             }
             // Any change to the inputs clears the preview, so a stale list can't be locked
-            .onChange(of: controller.target) { controller.inputsChanged() }
-            .onChange(of: controller.serial) { controller.inputsChanged() }
-            .onChange(of: controller.selectedGroupID) { controller.inputsChanged() }
-            .onChange(of: controller.extensionAttributeID) { controller.inputsChanged() }
-            .onChange(of: controller.serverURL) { controller.inputsChanged() }
+            .onChange(of: controller.lockSelection.kind) { controller.inputsChanged(for: .lock) }
+            .onChange(of: controller.lockSelection.serial) { controller.inputsChanged(for: .lock) }
+            .onChange(of: controller.lockSelection.groupID) { controller.inputsChanged(for: .lock) }
+            .onChange(of: controller.removeSelection.kind) { controller.inputsChanged(for: .removeCodes) }
+            .onChange(of: controller.removeSelection.serial) { controller.inputsChanged(for: .removeCodes) }
+            .onChange(of: controller.removeSelection.groupID) { controller.inputsChanged(for: .removeCodes) }
+            .onChange(of: controller.extensionAttributeID) { controller.sharedInputsChanged() }
+            .onChange(of: controller.serverURL) { controller.sharedInputsChanged() }
+            // Restores a smart group selected last time the app was used
+            .task { await controller.loadGroupsIfNeeded() }
+        }
+    }
+}
+
+/// Serial number or smart group inputs for one action.
+private struct TargetFields: View {
+    let controller: LockController
+    @Binding var selection: TargetSelection
+    let title: String
+
+    var body: some View {
+        Picker(title, selection: $selection.kind) {
+            ForEach(LockTarget.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .onChange(of: selection.kind) {
+            // Load the groups the first time a smart group target is chosen
+            if selection.kind == .smartGroup, controller.groups.isEmpty, controller.hasCredentials, !controller.isBusy {
+                Task { await controller.loadGroups() }
+            }
+        }
+
+        switch selection.kind {
+        case .serial:
+            TextField("Serial Number", text: $selection.serial)
+                .autocorrectionDisabled()
+        case .smartGroup:
+            HStack {
+                Picker("Smart Group", selection: $selection.groupID) {
+                    Text(controller.groups.isEmpty ? "Load groups first" : "Choose…").tag(Int?.none)
+                    // A saved group shows by ID until the list loads, so the picker never
+                    // has a selection without a matching tag (which can reset it)
+                    if let id = selection.groupID, !controller.groups.contains(where: { $0.id == id }) {
+                        Text("Group \(id)").tag(Optional(id))
+                    }
+                    ForEach(controller.groups) { group in
+                        Text(group.name).tag(Optional(group.id))
+                    }
+                }
+                Button("Load Groups", systemImage: "arrow.clockwise") {
+                    Task { await controller.loadGroups() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.teal)
+                .disabled(controller.isBusy || !controller.hasCredentials)
+            }
+            if !controller.groups.isEmpty {
+                Text("\(controller.groups.count) smart groups loaded")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// Shows an action's error, or why its Find Macs button is unavailable.
+private struct ActionStatus: View {
+    let controller: LockController
+    let operation: LockOperation
+
+    var body: some View {
+        if let error = controller.errorMessage, controller.errorOperation == operation {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+        } else if !controller.isBusy, let reason = controller.findBlocker(for: operation) {
+            Label(reason, systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -187,6 +275,11 @@ struct ContentView: View {
 /// Right-hand panel listing the Macs found, then the outcome for each once an action runs.
 private struct ResultsPanel: View {
     let controller: LockController
+
+    private var panelTitle: String {
+        let action = controller.panelOperation == .removeCodes ? "Remove Codes" : "Lock"
+        return "Macs Found for \(action) (\(controller.panelComputers.count))"
+    }
 
     var body: some View {
         if !controller.results.isEmpty {
@@ -198,10 +291,10 @@ private struct ResultsPanel: View {
                 }
             }
             .formStyle(.grouped)
-        } else if !controller.computers.isEmpty {
+        } else if !controller.panelComputers.isEmpty {
             Form {
-                Section("Macs Found (\(controller.computers.count))") {
-                    ForEach(controller.computers) { computer in
+                Section(panelTitle) {
+                    ForEach(controller.panelComputers) { computer in
                         ComputerRow(computer: computer)
                     }
                 }
@@ -254,9 +347,9 @@ private struct LockSidePanel: View {
         .background(
             LinearGradient(
                 colors: [
-                    Color(red: 0.98, green: 0.36, blue: 0.30),
-                    Color(red: 0.85, green: 0.12, blue: 0.40),
-                    Color(red: 0.38, green: 0.16, blue: 0.75),
+                    Color(red: 0.35, green: 0.70, blue: 1.00),
+                    Color(red: 0.10, green: 0.45, blue: 0.90),
+                    Color(red: 0.05, green: 0.20, blue: 0.60),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -339,5 +432,5 @@ private struct StatusLine: View {
 
 #Preview {
     ContentView()
-        .frame(width: 1180, height: 780)
+        .frame(width: 1340, height: 800)
 }

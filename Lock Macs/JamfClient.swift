@@ -18,6 +18,13 @@ struct JamfComputerGroup: Identifiable, Hashable, Decodable {
         case id, name
         case isSmart = "is_smart"
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Group \(id)"
+        isSmart = try container.decodeIfPresent(Bool.self, forKey: .isSmart) ?? false
+    }
 }
 
 enum JamfError: LocalizedError {
@@ -230,21 +237,42 @@ final class JamfClient {
     func members(ofGroup groupID: Int) async throws -> [JamfComputer] {
         struct Response: Decodable {
             struct Group: Decodable {
-                struct Member: Decodable { let id: Int }
-                let computers: [Member]
+                struct Member: Decodable {
+                    let id: Int
+                    let serial_number: String?
+                }
+                let computers: [Member]?
             }
             let computer_group: Group
         }
         let data = try await send("GET", path: "JSSResource/computergroups/id/\(groupID)")
-        let ids = try JSONDecoder().decode(Response.self, from: data).computer_group.computers.map(\.id)
+        let members = try JSONDecoder().decode(Response.self, from: data).computer_group.computers ?? []
+
+        // Look members up by serial number, the same filter the serial lookup uses.
+        // Members without a usable serial fall back to an ID filter.
+        func isSafeSerial(_ serial: String) -> Bool {
+            !serial.isEmpty && serial.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        }
+        let serials = members.compactMap { $0.serial_number?.trimmed.uppercased() }.filter(isSafeSerial)
+        let otherIDs = members
+            .filter { !isSafeSerial($0.serial_number?.trimmed.uppercased() ?? "") }
+            .map { String($0.id) }
 
         // Fetch inventory in batches so the filter stays a sensible length
-        var result: [JamfComputer] = []
-        for start in stride(from: 0, to: ids.count, by: 50) {
-            let batch = ids[start..<min(start + 50, ids.count)].map(String.init).joined(separator: ",")
-            result += try await computers(filter: "id=in=(\(batch))")
+        var found: [String: JamfComputer] = [:]
+        for start in stride(from: 0, to: serials.count, by: 50) {
+            let batch = serials[start..<min(start + 50, serials.count)].map { "\"\($0)\"" }.joined(separator: ",")
+            for computer in try await computers(filter: "hardware.serialNumber=in=(\(batch))") {
+                found[computer.id] = computer
+            }
         }
-        return result.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        for start in stride(from: 0, to: otherIDs.count, by: 50) {
+            let batch = otherIDs[start..<min(start + 50, otherIDs.count)].joined(separator: ",")
+            for computer in try await computers(filter: "id=in=(\(batch))") {
+                found[computer.id] = computer
+            }
+        }
+        return found.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     // MARK: - Extension attributes
