@@ -1,5 +1,7 @@
 # Lock Macs
 
+[![Buy me a coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=russcollis&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff)](https://www.buymeacoffee.com/russcollis)
+
 <img src="Lock%20Macs/Assets.xcassets/AppIcon.appiconset/icon-mac-128@2x.png" width="128" alt="Lock Macs icon">
 
 A SwiftUI app for sending a **Remote Lock** (MDM Device Lock) command to Macs managed by **Jamf Pro**. You can lock a single Mac by serial number or every member of a smart computer group. Each Mac gets its own random six-digit PIN.
