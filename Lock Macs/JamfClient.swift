@@ -293,6 +293,50 @@ final class JamfClient {
         ])
     }
 
+    /// Reads an extension attribute's value for each computer, keyed by computer ID.
+    /// Computers missing from the result were not returned by Jamf Pro.
+    func extensionAttributeValues(id definitionId: String, computerIDs: [String]) async throws -> [String: String] {
+        var values: [String: String] = [:]
+        // Batches of 50 always fit in one page of 100
+        for start in stride(from: 0, to: computerIDs.count, by: 50) {
+            let batch = computerIDs[start..<min(start + 50, computerIDs.count)].joined(separator: ",")
+            // Jamf files each extension attribute under the section for its inventory
+            // display category, so request every section that can hold one
+            let sections = ["GENERAL", "HARDWARE", "OPERATING_SYSTEM", "USER_AND_LOCATION", "PURCHASING", "EXTENSION_ATTRIBUTES"]
+            let data = try await send("GET", path: "api/v4/computers-inventory", query:
+                sections.map { URLQueryItem(name: "section", value: $0) } + [
+                    URLQueryItem(name: "page", value: "0"),
+                    URLQueryItem(name: "page-size", value: "100"),
+                    URLQueryItem(name: "filter", value: "id=in=(\(batch))")
+                ]
+            )
+            let records = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["results"] as? [[String: Any]] ?? []
+            for record in records {
+                guard let id = record["id"].map({ "\($0)" }) else { continue }
+                values[id] = Self.value(ofExtensionAttribute: definitionId, in: record) ?? ""
+            }
+        }
+        return values
+    }
+
+    /// Searches an inventory record for the extension attribute, wherever its section put it.
+    private static func value(ofExtensionAttribute definitionId: String, in json: Any) -> String? {
+        if let object = json as? [String: Any] {
+            if let attributes = object["extensionAttributes"] as? [[String: Any]],
+               let match = attributes.first(where: { $0["definitionId"].map { "\($0)" } == definitionId }) {
+                return (match["values"] as? [String] ?? []).joined(separator: ", ")
+            }
+            for child in object.values {
+                if let found = value(ofExtensionAttribute: definitionId, in: child) { return found }
+            }
+        } else if let array = json as? [Any] {
+            for child in array {
+                if let found = value(ofExtensionAttribute: definitionId, in: child) { return found }
+            }
+        }
+        return nil
+    }
+
     // MARK: - MDM
 
     /// Sends a Device Lock command and returns the command UUID if Jamf supplies one.

@@ -8,10 +8,11 @@ enum LockTarget: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
-/// The two independent actions, each with its own target.
+/// The independent actions, each with its own target.
 enum LockOperation {
     case lock
     case removeCodes
+    case lookupCodes
 }
 
 /// Which Macs an action applies to, and the Macs found for it.
@@ -73,6 +74,9 @@ final class LockController {
     var removeSelection = TargetSelection(savedAs: "removeSelection") {
         didSet { removeSelection.save(as: "removeSelection") }
     }
+    var lookupSelection = TargetSelection(savedAs: "lookupSelection") {
+        didSet { lookupSelection.save(as: "lookupSelection") }
+    }
     var extensionAttributeID = UserDefaults.standard.string(forKey: "extensionAttributeID") ?? "" {
         didSet { UserDefaults.standard.set(extensionAttributeID, forKey: "extensionAttributeID") }
     }
@@ -108,6 +112,7 @@ final class LockController {
         switch operation {
         case .lock: lockSelection
         case .removeCodes: removeSelection
+        case .lookupCodes: lookupSelection
         }
     }
 
@@ -115,6 +120,7 @@ final class LockController {
         switch operation {
         case .lock: change(&lockSelection)
         case .removeCodes: change(&removeSelection)
+        case .lookupCodes: change(&lookupSelection)
         }
     }
 
@@ -171,6 +177,7 @@ final class LockController {
     func sharedInputsChanged() {
         lockSelection.computers = []
         removeSelection.computers = []
+        lookupSelection.computers = []
         extensionAttributeName = nil
         results = []
         panelOperation = nil
@@ -204,7 +211,7 @@ final class LockController {
 
     /// Loads the groups at launch when a saved target is a smart group, so its selection shows.
     func loadGroupsIfNeeded() async {
-        let usesGroups = lockSelection.kind == .smartGroup || removeSelection.kind == .smartGroup
+        let usesGroups = [lockSelection, removeSelection, lookupSelection].contains { $0.kind == .smartGroup }
         guard usesGroups, groups.isEmpty, hasCredentials, !isBusy else { return }
         await loadGroups()
     }
@@ -215,6 +222,7 @@ final class LockController {
             let ids = Set(groups.map(\.id))
             if let id = lockSelection.groupID, !ids.contains(id) { lockSelection.groupID = nil }
             if let id = removeSelection.groupID, !ids.contains(id) { removeSelection.groupID = nil }
+            if let id = lookupSelection.groupID, !ids.contains(id) { lookupSelection.groupID = nil }
             if groups.isEmpty {
                 throw JamfError.notFound("Jamf Pro returned no smart computer groups. Check the API role can read smart and static computer groups.")
             }
@@ -230,19 +238,44 @@ final class LockController {
         await run(for: operation) { client in
             let eaID = extensionAttributeID.trimmed
             extensionAttributeName = try await client.extensionAttributeName(id: eaID)
-
-            let found: [JamfComputer]
-            switch selection.kind {
-            case .serial:
-                found = [try await client.computer(serial: selection.serial)]
-            case .smartGroup:
-                guard let groupID = selection.groupID else { return }
-                found = try await client.members(ofGroup: groupID)
-                if found.isEmpty {
-                    throw JamfError.notFound("That smart group has no members, or none of its members could be found in inventory.")
-                }
-            }
+            let found = try await resolve(selection, client: client)
             updateSelection(for: operation) { $0.computers = found }
+        }
+    }
+
+    /// Finds the lookup target Macs and reads the PIN stored for each. Nothing is changed.
+    func lookUpLockCodes() async {
+        inputsChanged(for: .lookupCodes)
+        results = []
+        panelOperation = .lookupCodes
+        let selection = lookupSelection
+        await run(for: .lookupCodes) { client in
+            let eaID = extensionAttributeID.trimmed
+            extensionAttributeName = try await client.extensionAttributeName(id: eaID)
+            let found = try await resolve(selection, client: client)
+            lookupSelection.computers = found
+
+            let codes = try await client.extensionAttributeValues(id: eaID, computerIDs: found.map(\.id))
+            results = found.map { computer in
+                var result = LockResult(computer: computer, pin: codes[computer.id]?.trimmed ?? "", lockStatus: nil)
+                result.eaStatus = codes[computer.id] == nil ? .failed("Jamf Pro did not return this Mac's inventory.") : .done
+                return result
+            }
+        }
+    }
+
+    /// The Macs a target refers to: one Mac by serial, or a smart group's members.
+    private func resolve(_ selection: TargetSelection, client: JamfClient) async throws -> [JamfComputer] {
+        switch selection.kind {
+        case .serial:
+            return [try await client.computer(serial: selection.serial)]
+        case .smartGroup:
+            guard let groupID = selection.groupID else { return [] }
+            let found = try await client.members(ofGroup: groupID)
+            if found.isEmpty {
+                throw JamfError.notFound("That smart group has no members, or none of its members could be found in inventory.")
+            }
+            return found
         }
     }
 

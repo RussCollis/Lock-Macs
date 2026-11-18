@@ -8,6 +8,9 @@ If this app saved you time or gave you a foundation to work from, please conside
 
 A SwiftUI app for sending a **Remote Lock** (MDM Device Lock) command to Macs managed by **Jamf Pro**. You can lock a single Mac by serial number or every member of a smart computer group. Each Mac gets its own random six-digit PIN.
 
+**Version:** 1.1
+**Owner:** Russell Collis
+
 ## Features
 
 - Target one Mac by **serial number**, or a whole **smart computer group**
@@ -16,6 +19,7 @@ A SwiftUI app for sending a **Remote Lock** (MDM Device Lock) command to Macs ma
 - Optional **lock screen message**, with a warning when the text is long
 - Preview the Macs it found before locking. Macs that aren't MDM managed are flagged and skipped
 - Shows the result for each Mac: whether the PIN was saved and whether the lock command was sent
+- **Look up lock codes**: shows the stored PIN for a serial number or smart group, so a locked Mac can be unlocked
 - **Remove lock codes**: clears the stored PIN for a serial number or smart group once the Macs are unlocked
 - Can **save the API details to the Keychain** (optional)
 
@@ -63,6 +67,10 @@ The results list shows each Mac's PIN. The PIN is also saved in the extension at
 
 > ⚠️ **Locked Macs restart and can only be unlocked with their PIN.** Try it on one test Mac before locking a group.
 
+### Looking up lock codes
+
+To find the PIN for a locked Mac, choose a serial number or smart group under **Look Up Lock Codes** and click **Look Up Codes**. The results list shows each Mac's stored PIN, or *No lock code stored*. Nothing is changed in Jamf Pro.
+
 ### Removing lock codes
 
 After the Macs are unlocked, you can clear their stored PINs. Choose the same serial number or smart group and click **Find Macs**. Then click **Remove Lock Codes…** and confirm. This empties the extension attribute for each Mac it found, including Macs that aren't MDM managed. It doesn't send a command to the Macs.
@@ -104,7 +112,7 @@ The app invalidates the API access token after each operation.
 
 ## Build number
 
-The build number (`CFBundleVersion`) goes up by 1 on **every build**, and running or testing in Xcode both build first. The **Increment Build Number** build phase runs `Scripts/increment_build_number.sh`. That script stores the latest number in `BuildNumber.txt` and writes it into the built app. The side bar shows it as *Version 1.0 (build)*.
+The build number (`CFBundleVersion`) goes up by 1 on **every build**, and running or testing in Xcode both build first. The **Increment Build Number** build phase runs `Scripts/increment_build_number.sh`. That script stores the latest number in `BuildNumber.txt` and writes it into the built app. The side bar shows it as *Version 1.1 (build)*.
 
 To start from a different number, put the number before it in `BuildNumber.txt`. For example, enter `99` and the next build is `100`.
 

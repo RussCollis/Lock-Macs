@@ -148,13 +148,39 @@ struct ContentView: View {
                         Text("Clears the stored PIN from the extension attribute. Independent of the Lock target above.")
                     }
 
+                    Section {
+                        TargetFields(controller: controller, selection: $controller.lookupSelection, title: "Look Up Codes For")
+
+                        HStack {
+                            Button("Look Up Codes", systemImage: "key.viewfinder") {
+                                Task { await controller.lookUpLockCodes() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.blue)
+                            .disabled(!controller.canFind(for: .lookupCodes))
+
+                            Spacer()
+
+                            if controller.isBusy {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
+                        ActionStatus(controller: controller, operation: .lookupCodes)
+                    } header: {
+                        Text("Look Up Lock Codes")
+                    } footer: {
+                        Text("Shows the PIN stored in the extension attribute for each Mac, so a locked Mac can be unlocked. Nothing is changed.")
+                    }
+
                 }
                 .formStyle(.grouped)
 
                 Divider()
 
+                // Wide enough for name, serial and PIN to sit on one line
                 ResultsPanel(controller: controller)
-                    .frame(width: 320)
+                    .frame(width: 440)
             }
             .navigationTitle("Jamf Remote Lock")
             #if os(macOS)
@@ -163,7 +189,7 @@ struct ContentView: View {
             #endif
             #if os(macOS)
             // Large enough to show every option in one window without scrolling
-            .frame(minWidth: 1320, minHeight: 760)
+            .frame(minWidth: 1440, minHeight: 760)
             #endif
             .confirmationDialog(
                 "Lock \(controller.lockableComputers.count) Mac(s)?",
@@ -194,6 +220,9 @@ struct ContentView: View {
             .onChange(of: controller.removeSelection.kind) { controller.inputsChanged(for: .removeCodes) }
             .onChange(of: controller.removeSelection.serial) { controller.inputsChanged(for: .removeCodes) }
             .onChange(of: controller.removeSelection.groupID) { controller.inputsChanged(for: .removeCodes) }
+            .onChange(of: controller.lookupSelection.kind) { controller.inputsChanged(for: .lookupCodes) }
+            .onChange(of: controller.lookupSelection.serial) { controller.inputsChanged(for: .lookupCodes) }
+            .onChange(of: controller.lookupSelection.groupID) { controller.inputsChanged(for: .lookupCodes) }
             .onChange(of: controller.extensionAttributeID) { controller.sharedInputsChanged() }
             .onChange(of: controller.serverURL) { controller.sharedInputsChanged() }
             // Restores a smart group selected last time the app was used
@@ -277,16 +306,20 @@ private struct ResultsPanel: View {
     let controller: LockController
 
     private var panelTitle: String {
-        let action = controller.panelOperation == .removeCodes ? "Remove Codes" : "Lock"
+        let action = switch controller.panelOperation {
+        case .removeCodes: "Remove Codes"
+        case .lookupCodes: "Look Up Codes"
+        default: "Lock"
+        }
         return "Macs Found for \(action) (\(controller.panelComputers.count))"
     }
 
     var body: some View {
         if !controller.results.isEmpty {
             Form {
-                Section("Results") {
+                Section(controller.panelOperation == .lookupCodes ? "Lock Codes" : "Results") {
                     ForEach(controller.results) { result in
-                        ResultRow(result: result)
+                        ResultRow(result: result, isLookup: controller.panelOperation == .lookupCodes)
                     }
                 }
             }
@@ -304,7 +337,7 @@ private struct ResultsPanel: View {
             ContentUnavailableView(
                 "No Macs Yet",
                 systemImage: "desktopcomputer",
-                description: Text("Click Find Macs to list the Macs that will be locked or have their lock codes removed. Results appear here.")
+                description: Text("Click Find Macs to list the Macs that will be locked or have their lock codes removed, or Look Up Codes to see stored PINs. Results appear here.")
             )
         }
     }
@@ -383,21 +416,36 @@ private struct ComputerRow: View {
 
 private struct ResultRow: View {
     let result: LockResult
+    /// Lookup rows show the stored PIN rather than the outcome of a change.
+    var isLookup = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(result.computer.name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Text(result.computer.serialNumber)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
                 Spacer()
                 if !result.pin.isEmpty {
                     Text(result.pin)
                         .font(.body.monospaced())
                         .textSelection(.enabled)
+                        .fixedSize()
                 }
             }
-            if let lockStatus = result.lockStatus {
+            if isLookup {
+                if case .failed = result.eaStatus {
+                    StatusLine(title: "Look up", status: result.eaStatus)
+                } else if result.pin.isEmpty {
+                    Label("No lock code stored", systemImage: "minus.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let lockStatus = result.lockStatus {
                 StatusLine(title: "Extension attribute", status: result.eaStatus)
                 StatusLine(title: "Lock command", status: lockStatus)
             } else {
@@ -432,5 +480,5 @@ private struct StatusLine: View {
 
 #Preview {
     ContentView()
-        .frame(width: 1340, height: 800)
+        .frame(width: 1460, height: 800)
 }
