@@ -8,7 +8,7 @@ If this app saved you time or gave you a foundation to work from, please conside
 
 A SwiftUI app for sending a **Remote Lock** (MDM Device Lock) command to Macs managed by **Jamf Pro**. You can lock a single Mac by serial number or every member of a smart computer group. Each Mac gets its own random six-digit PIN.
 
-**Version:** 1.1
+**Version:** 1.1.2
 **Owner:** Russell Collis
 
 ## Features

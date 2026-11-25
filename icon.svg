@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2B4AA8"/>
+      <stop offset="1" stop-color="#0E1E4D"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3F78EE"/>
+      <stop offset="1" stop-color="#2F67E0"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS icon grid: 824pt rounded square centred on a 1024 canvas -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <!-- Laptop lid: white bezel with a primary-blue screen -->
+  <rect x="262" y="300" width="500" height="340" rx="36" fill="#FFFFFF"/>
+  <rect x="298" y="336" width="428" height="268" rx="14" fill="url(#screen)"/>
+  <!-- Laptop base -->
+  <path d="M196 664 H828 V680 Q828 724 784 724 H240 Q196 724 196 680 Z" fill="#FFFFFF"/>
+  <rect x="452" y="664" width="120" height="18" rx="9" fill="#AEBBDD"/>
+  <!-- Padlock -->
+  <path d="M462 462 V430 A50 50 0 0 1 562 430 V462" fill="none" stroke="#FFFFFF" stroke-width="26" stroke-linecap="round"/>
+  <rect x="436" y="456" width="152" height="120" rx="20" fill="#FFFFFF"/>
+  <circle cx="512" cy="506" r="15" fill="#0E1E4D"/>
+  <rect x="504" y="508" width="16" height="38" rx="8" fill="#0E1E4D"/>
+</svg>

@@ -13,18 +13,18 @@
 		<key>CFBundleIdentifier</key>
 		<string>com.russcollis.LockMacs</string>
 		<key>CFBundleShortVersionString</key>
-		<string>1.1</string>
+		<string>1.1.2</string>
 		<key>CFBundleVersion</key>
-		<string>33</string>
+		<string>38</string>
 		<key>SigningIdentity</key>
-		<string>Developer ID Application: Russell Collis (UM5LY5579J)</string>
+		<string>Apple Development: Russell Collis (A996XTB973)</string>
 		<key>Team</key>
 		<string>UM5LY5579J</string>
 	</dict>
 	<key>ArchiveVersion</key>
 	<integer>2</integer>
 	<key>CreationDate</key>
-	<date>2026-11-18T11:09:18Z</date>
+	<date>2026-11-25T12:27:47Z</date>
 	<key>Name</key>
 	<string>Lock Macs</string>
 	<key>SchemeName</key>
